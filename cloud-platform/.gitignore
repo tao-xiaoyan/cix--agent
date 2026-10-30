@@ -1,0 +1,4 @@
+backend/.venv/
+.npm-cache/
+.test-data/
+*.local.json
