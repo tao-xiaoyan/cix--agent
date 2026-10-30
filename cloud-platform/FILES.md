@@ -1,0 +1,45 @@
+# 修改与新增文件清单
+
+- cloud-platform/.dockerignore
+- cloud-platform/.env.example
+- cloud-platform/.gitignore
+- cloud-platform/FILES.md
+- cloud-platform/README.md
+- cloud-platform/TEST-RESULTS.md
+- cloud-platform/backend/Dockerfile
+- cloud-platform/backend/Dockerfile.dockerignore
+- cloud-platform/backend/alembic.ini
+- cloud-platform/backend/app/__init__.py
+- cloud-platform/backend/app/config.py
+- cloud-platform/backend/app/db.py
+- cloud-platform/backend/app/main.py
+- cloud-platform/backend/app/security.py
+- cloud-platform/backend/app/worker.py
+- cloud-platform/backend/migrations/env.py
+- cloud-platform/backend/migrations/script.py.mako
+- cloud-platform/backend/migrations/versions/0001_initial.py
+- cloud-platform/backend/requirements.txt
+- cloud-platform/backend/scripts/import_mock.py
+- cloud-platform/backend/scripts/init_dev.py
+- cloud-platform/backend/scripts/smoke.py
+- cloud-platform/backend/tests/test_api.py
+- cloud-platform/compose.test.yaml
+- cloud-platform/compose.yaml
+- cloud-platform/contract-notes.md
+- cloud-platform/frontend/.dockerignore
+- cloud-platform/frontend/Dockerfile
+- cloud-platform/frontend/index.html
+- cloud-platform/frontend/nginx.conf
+- cloud-platform/frontend/package-lock.json
+- cloud-platform/frontend/package.json
+- cloud-platform/frontend/scripts/generate-types.mjs
+- cloud-platform/frontend/src/App.vue
+- cloud-platform/frontend/src/Chart.vue
+- cloud-platform/frontend/src/api.ts
+- cloud-platform/frontend/src/events.d.ts
+- cloud-platform/frontend/src/main.ts
+- cloud-platform/frontend/src/style.css
+- cloud-platform/frontend/tsconfig.json
+- cloud-platform/frontend/vite.config.ts
+
+虚拟环境、node_modules、构建产物、npm 缓存与隔离测试数据均被忽略。未提交 Git。
