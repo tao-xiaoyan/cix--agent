@@ -1,0 +1,131 @@
+[
+  {
+    "schema_version": "1.0.0",
+    "device_id": "mock-device-001",
+    "timestamp": "2026-10-30T00:00:00Z",
+    "source": "mock",
+    "confidence": null,
+    "event_id": "00000000-0000-4000-8000-000000000001",
+    "event_type": "physiological_window",
+    "payload": {
+      "window_start": "2026-10-30T00:00:00Z",
+      "window_end": "2026-10-30T00:00:01Z",
+      "connection": "unknown",
+      "protocol": null,
+      "channels": [
+        {
+          "name": "unmapped-channel-0",
+          "unit": null,
+          "sampling_rate_hz": null,
+          "samples": [
+            null
+          ],
+          "quality": "unknown",
+          "missing_reason": "protocol_pending"
+        }
+      ]
+    }
+  },
+  {
+    "schema_version": "1.0.0",
+    "device_id": "mock-device-001",
+    "timestamp": "2026-10-30T00:00:00Z",
+    "source": "mock",
+    "confidence": null,
+    "event_id": "00000000-0000-4000-8000-000000000002",
+    "event_type": "pose_estimation",
+    "payload": {
+      "coordinate_system": "normalized",
+      "persons": [],
+      "status": "no_detection"
+    }
+  },
+  {
+    "schema_version": "1.0.0",
+    "device_id": "mock-device-001",
+    "timestamp": "2026-10-30T00:00:00Z",
+    "source": "mock",
+    "confidence": null,
+    "event_id": "00000000-0000-4000-8000-000000000003",
+    "event_type": "sleep_posture",
+    "payload": {
+      "label": null,
+      "status": "unknown",
+      "reason": "model_pending"
+    }
+  },
+  {
+    "schema_version": "1.0.0",
+    "device_id": "mock-device-001",
+    "timestamp": "2026-10-30T00:00:00Z",
+    "source": "mock",
+    "confidence": null,
+    "event_id": "00000000-0000-4000-8000-000000000004",
+    "event_type": "audio_event",
+    "payload": {
+      "label": null,
+      "status": "unavailable",
+      "reason": "adapter_pending"
+    }
+  },
+  {
+    "schema_version": "1.0.0",
+    "device_id": "mock-device-001",
+    "timestamp": "2026-10-30T00:00:00Z",
+    "source": "mock",
+    "confidence": null,
+    "event_id": "00000000-0000-4000-8000-000000000005",
+    "event_type": "anomaly_event",
+    "payload": {
+      "code": "sensor_disconnected",
+      "severity": "warning",
+      "description": "Mock sensor disconnected",
+      "related_event_ids": []
+    }
+  },
+  {
+    "schema_version": "1.0.0",
+    "device_id": "mock-device-001",
+    "timestamp": "2026-10-30T00:00:00Z",
+    "source": "mock",
+    "confidence": null,
+    "event_id": "00000000-0000-4000-8000-000000000006",
+    "event_type": "agent_decision",
+    "payload": {
+      "decision": "wait_for_data",
+      "rationale": "Input unavailable",
+      "actions": [],
+      "execution_status": "proposed"
+    }
+  },
+  {
+    "schema_version": "1.0.0",
+    "device_id": "mock-device-001",
+    "timestamp": "2026-10-30T00:00:00Z",
+    "source": "mock",
+    "confidence": null,
+    "event_id": "00000000-0000-4000-8000-000000000007",
+    "event_type": "cloud_analysis_result",
+    "payload": {
+      "task_id": "00000000-0000-4000-8000-000000000099",
+      "summary": "Mock result",
+      "findings": []
+    }
+  },
+  {
+    "schema_version": "1.0.0",
+    "device_id": "mock-device-001",
+    "timestamp": "2026-10-30T00:00:00Z",
+    "source": "mock",
+    "confidence": null,
+    "event_id": "00000000-0000-4000-8000-000000000008",
+    "event_type": "device_metrics",
+    "payload": {
+      "cpu_percent": 10,
+      "pending_upload_count": 0,
+      "sensors": {
+        "unmapped-sensor": "unknown"
+      }
+    }
+  }
+]
