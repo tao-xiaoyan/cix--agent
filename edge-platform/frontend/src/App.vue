@@ -17,6 +17,8 @@ const metrics = ref<Event | null>(null)
 const channels = ref<Channel[]>([])
 const anomalies = ref<Event[]>([])
 const audio = ref<Event[]>([])
+const tasks = ref<any[]>([])
+const results = ref<Event[]>([])
 const decisions = ref<Event[]>([])
 const points = ref<Record<string, (number | null)[]>>({})
 const seen = new Set<string>()
@@ -54,11 +56,14 @@ function consume(event: Event) {
   if (event.event_type === 'device_metrics') metrics.value = event
   if (event.event_type === 'anomaly_event') anomalies.value = [event, ...anomalies.value].slice(0, 5)
   if (event.event_type === 'audio_event') audio.value = [event, ...audio.value].slice(0, 5)
+  if (event.event_type === 'cloud_analysis_result') results.value = [event, ...results.value].slice(0, 5)
   if (event.event_type === 'agent_decision') decisions.value = [event, ...decisions.value].slice(0, 5)
 }
 async function refresh() {
   try {
     const [statusResponse, eventsResponse] = await Promise.all([fetch('/api/v1/device/status'), fetch('/api/v1/events/recent?limit=100')])
+    const taskResponse = await fetch('/api/v1/analysis/tasks/local')
+    if (taskResponse.ok) tasks.value = (await taskResponse.json()).items
     if (statusResponse.ok) status.value = await statusResponse.json()
     if (eventsResponse.ok) { const page = await eventsResponse.json(); for (const event of [...page.items].reverse()) consume(event) }
   } catch { connection.value = '服务不可用' }
@@ -102,6 +107,10 @@ onUnmounted(() => { stopped = true; socket?.close(); chart?.dispose(); window.re
         <section class="column"><article class="panel signal"><div class="panel-head"><div><h2>生理信号实时曲线</h2><p>通道由输入元数据提供 · 最近 120 个采样点</p></div><span>LIVE SIGNAL</span></div><div ref="chartEl" class="chart"></div><div v-if="!channels.length" class="empty">等待生理信号窗口</div><div class="channels"><div v-for="channel in channels" :key="channel.name" class="channel"><i></i><div><strong>{{ channel.name }}</strong><small>{{ channel.unit || '单位未知' }} · {{ channel.sampling_rate_hz == null ? '采样率未知' : `${channel.sampling_rate_hz} Hz` }}</small></div><span>{{ channel.quality }}</span></div></div><p class="hint">PPG / GSR / IMU 为模拟候选通道，不代表实际设备能力。</p></article></section>
         <section class="column feeds"><article class="panel feed"><div class="panel-head"><h2>异常事件</h2><span>ALERTS</span></div><div v-if="!anomalies.length" class="empty">暂无异常事件</div><div v-for="event in anomalies" :key="event.event_id" class="feed-item alert"><small>{{ new Date(event.timestamp).toLocaleTimeString() }} · {{ event.source.toUpperCase() }}</small><strong>{{ event.payload.description }}</strong><span>{{ event.payload.severity }} / {{ event.payload.code }}</span></div></article><article class="panel feed"><div class="panel-head"><h2>音频事件</h2><span>AUDIO</span></div><div v-if="!audio.length" class="empty">暂无音频事件</div><div v-for="event in audio" :key="event.event_id" class="feed-item"><small>{{ new Date(event.timestamp).toLocaleTimeString() }} · {{ event.source.toUpperCase() }}</small><strong>{{ event.payload.label || '未知类别' }}</strong><span>{{ event.payload.status }}</span></div></article><article class="panel feed"><div class="panel-head"><h2>规则决策日志</h2><span>RULES</span></div><div v-if="!decisions.length" class="empty">等待规则触发</div><div v-for="event in decisions" :key="event.event_id" class="feed-item"><small>{{ new Date(event.timestamp).toLocaleTimeString() }} · {{ event.source.toUpperCase() }}</small><strong>{{ event.payload.decision }}</strong><span>{{ event.payload.rationale }}</span><em>{{ event.payload.execution_status }} · {{ event.payload.actions?.join(' → ') }}</em></div></article></section>
       </div>
+      <section class="panel"><h2>云端 Mock 分析闭环</h2>
+        <div v-for="task in tasks" :key="task.task_key">异常 {{ task.task_key }} → 任务 {{ task.cloud_task_id || '等待上传' }} · {{ task.status }} {{ task.last_error }}</div>
+        <div v-for="result in results" :key="result.event_id">结果 {{ result.event_id }} · 任务 {{ result.payload.task_id }} · {{ result.payload.summary }}</div>
+      </section>
       <footer class="metrics"><div><small>CPU 使用率</small><strong>{{ metrics?.payload.cpu_percent == null ? '未采集' : `${metrics.payload.cpu_percent}%` }}</strong></div><div><small>内存占用</small><strong>{{ metrics?.payload.memory_used_bytes == null ? '未采集' : `${Math.round(metrics.payload.memory_used_bytes / 1048576)} MiB` }}</strong></div><div><small>NPU 状态</small><strong>未接入</strong></div><div><small>推理 FPS</small><strong>未测量</strong></div><div><small>模型运行状态</small><strong>Mock 模式</strong></div></footer>
     </main>
   </div>

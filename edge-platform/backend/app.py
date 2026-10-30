@@ -86,7 +86,7 @@ class Store:
             db.execute('INSERT INTO events VALUES (?,?,?,?,?,?)',
                        (str(event.event_id), event.device_id, event.timestamp.isoformat(),
                         event.event_type, utcnow().isoformat(), serialized))
-            if upload and event.source != 'cloud':
+            if upload and event.source != 'cloud' and event.event_type != 'cloud_analysis_result':
                 db.execute("INSERT INTO outbox(event_id,state) VALUES (?,'pending')", (str(event.event_id),))
         return True
 
@@ -161,6 +161,14 @@ class Store:
     def pending_tasks(self):
         with self.connect() as db:
             return db.execute("SELECT task_key,request_json FROM tasks WHERE status='pending'").fetchall()
+
+    def active_tasks(self):
+        with self.connect() as db:
+            return db.execute("SELECT * FROM tasks WHERE status IN ('queued','running')").fetchall()
+
+    def list_tasks(self):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute('SELECT * FROM tasks ORDER BY rowid DESC LIMIT 100')]
 
     def task_result(self, key: str, status: str, cloud_id: str | None, message: str | None):
         with self.connect() as db:
@@ -257,6 +265,14 @@ class HttpCloudClient:
             return AnalysisTask.model_validate(response.json())
 
 
+    async def get_event(self, event_id: UUID) -> Event:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(self.url + f'/api/v1/events/{event_id}',
+                                        headers={'Authorization': 'Bearer ' + self.token})
+            response.raise_for_status()
+            return EVENT_ADAPTER.validate_python(response.json())
+
+
 class Runtime:
     def __init__(self, store: Store, device_id: str, client: HttpCloudClient | None, mock: bool):
         self.store, self.device_id, self.client, self.mock = store, device_id, client, mock
@@ -288,7 +304,7 @@ class Runtime:
                         'actions': ['record_local', 'queue_cloud_analysis'],
                         'related_event_ids': [str(anomaly.event_id)], 'execution_status': 'executed'}})
         await self.record(decision, dispatch=False)
-        request = AnalysisRequest(device_id=self.device_id, start=now - timedelta(hours=24), end=now)
+        request = AnalysisRequest(device_id=self.device_id, start=now - timedelta(hours=24), end=now + timedelta(microseconds=1))
         self.store.queue_task(request, str(anomaly.event_id))
 
     async def generate(self):
@@ -318,9 +334,28 @@ class Runtime:
                             self.store.mark_result(event_id, 'quarantined', str(result.error))
                         else:
                             self.store.mark_result(event_id, 'pending', 'retryable or incomplete response', min(60, 2 ** attempt))
-                for task in self.store.pending_tasks():
+                # Upload snapshot may predate an anomaly queued during await upload.
+                # Never start analysis until its source events are acknowledged.
+                for task in (self.store.pending_tasks() if self.store.pending_count() == 0 else []):
                     result = await self.client.create_task(AnalysisRequest.model_validate_json(task['request_json']), task['task_key'])
-                    self.store.task_result(task['task_key'], result.status, str(result.task_id), None)
+                    # Replayed creation can already be terminal after a lost response.
+                    # Fetch/persist a successful result before marking local success.
+                    self.store.task_result(task['task_key'], 'queued' if result.status == 'succeeded' else result.status,
+                                           str(result.task_id), result.error.model_dump_json() if result.error else None)
+                for task in self.store.active_tasks():
+                    result = await self.client.get_task(UUID(task['cloud_task_id']))
+                    if result.device_id != self.device_id:
+                        raise ValueError('task device mismatch')
+                    if result.status == 'succeeded':
+                        if not result.result_event_id:
+                            raise ValueError('missing result event')
+                        event = await self.client.get_event(result.result_event_id)
+                        if (event.device_id != self.device_id or event.event_type != 'cloud_analysis_result'
+                                or event.payload.task_id != result.task_id):
+                            raise ValueError('result association mismatch')
+                        await self.record(event, dispatch=False)
+                    self.store.task_result(task['task_key'], result.status, str(result.task_id),
+                                           result.error.model_dump_json() if result.error else None)
                 self.cloud_state = 'online'
                 attempt = 0
             except (httpx.HTTPError, ValidationError, ValueError) as exc:
@@ -411,6 +446,11 @@ def create_app(db_path: Path | None = None, mock: bool | None = None, cloud_clie
             return error(422, 'validation_error', 'Invalid event query')
         except ValueError:
             return error(400, 'invalid_cursor', 'Invalid or expired cursor')
+
+    @app.get('/api/v1/analysis/tasks/local')
+    def local_tasks(request: Request, authorization: str | None = Header(None)):
+        require_auth(authorization, request.cookies.get('edge_session'))
+        return {'items': runtime.store.list_tasks()}
 
     @app.websocket('/ws/realtime')
     async def realtime(ws: WebSocket):

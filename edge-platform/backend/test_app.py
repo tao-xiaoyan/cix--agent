@@ -116,3 +116,15 @@ def test_cloud_batch_acknowledgement_and_offline_retry():
         fake = FakeCloud()
         runtime = app_module.Runtime(app_module.Store(Path(directory) / 'events.sqlite3'), 'test-device', fake, False)
         asyncio.run(exercise(runtime, fake))
+
+
+def test_mock_cloud_result_does_not_reenter_outbox():
+    with tempfile.TemporaryDirectory() as directory:
+        store = app_module.Store(Path(directory) / 'events.sqlite3')
+        template = next(e for e in app_module.EXAMPLES if e['event_type'] == 'cloud_analysis_result')
+        raw = {**template, 'event_id': str(uuid4()), 'source': 'mock'}
+        event = TypeAdapter(Event).validate_python(raw)
+        assert store.add(event)
+        assert not store.add(event)
+        assert store.pending_count() == 0
+        assert store.recent(app_module.EventQuery(), event.device_id).items[0].payload.task_id == event.payload.task_id
