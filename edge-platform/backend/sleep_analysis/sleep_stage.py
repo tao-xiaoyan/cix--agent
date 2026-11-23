@@ -1,6 +1,7 @@
 """Authorized, read-only AAUWSS epoch inference on the local CIX NOE runtime."""
 
 import hashlib
+import json
 import platform
 import time
 from collections.abc import Mapping
@@ -10,18 +11,10 @@ from typing import Literal
 
 from pydantic import Field
 
-from shared.schemas.events import ContractModel
+from shared.schemas.skill_tasks import STAGE_MODEL_SHA256, STAGE_SKILL, STAGES, SleepStageRequest
 
-STAGE_SKILL = 'sleep_stage_inference'
-STAGES = ['Wake', 'N1', 'N2', 'N3', 'REM']
-MODEL_HASH = 'f24597fe2ec04170e0684e9c4266b7b05802dde3901833ed5264456c8ef92854'
+MODEL_HASH = STAGE_MODEL_SHA256
 MODEL_LIMITATION = 'experimental_low_accuracy_model'
-
-
-class SleepStageRequest(ContractModel):
-    dataset_id: str = Field(min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_-]+$')
-    subject_id: int = Field(ge=1, le=13, strict=True)
-    epoch_id: int = Field(ge=1, strict=True)
 
 
 class SleepStageOutput(SleepStageRequest):
@@ -91,8 +84,20 @@ class SleepStageRuntime:
             source={'input_sha256': asset.input_sha256, 'source_pickle_sha256': asset.source_pickle_sha256,
                     'source_row': asset.source_row, 'model_sha256': self.model_sha256,
                     'input_shape': [1, 1, 1920], 'preprocessing': 'raw float32; per-epoch z-score inside compiled graph',
-                    'label_order': STAGES}, execution=execution,
+                    'label_order': list(STAGES)}, execution=execution,
         )
+
+
+def load_reference_epoch(root: Path) -> AuthorizedEpoch:
+    metadata = json.loads((root / 'epoch_source.json').read_text(encoding='utf-8'))
+    return AuthorizedEpoch(
+        request=SleepStageRequest(dataset_id='aauwss', subject_id=12, epoch_id=1),
+        input_path=root / 'subject12_epoch1_input.npy',
+        input_sha256=metadata['input_npy_sha256'],
+        source_pickle_sha256=metadata['source_pickle_sha256'],
+        source_row=metadata['row'],
+        human_annotation=metadata['true_label'],
+    )
 
 
 def run_noe(model: Path, x: 'np.ndarray') -> tuple[list[float], dict]:

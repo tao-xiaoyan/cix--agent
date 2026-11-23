@@ -13,18 +13,12 @@ import httpx
 from .sleep_analysis.agent import create_agent
 from .sleep_analysis.contracts import WindowRequest
 from .sleep_analysis.qwen import ChatCompletionsClient, QwenPlanner, parse_http_action
-from .sleep_analysis.sleep_stage import AuthorizedEpoch, SleepStageRequest, SleepStageRuntime, STAGE_SKILL
+from .sleep_analysis.sleep_stage import load_reference_epoch, SleepStageRuntime, STAGE_SKILL
 
 
 async def run(options, record):
     root = options.assets
-    metadata = json.loads((root / 'epoch_source.json').read_text())
-    asset = AuthorizedEpoch(
-        request=SleepStageRequest(dataset_id='aauwss', subject_id=12, epoch_id=1),
-        input_path=root/'subject12_epoch1_input.npy', input_sha256=metadata['input_npy_sha256'],
-        source_pickle_sha256=metadata['source_pickle_sha256'], source_row=metadata['row'],
-        human_annotation=metadata['true_label'],
-    )
+    asset = load_reference_epoch(root)
     pending = {}
 
     async def request_sent(request):

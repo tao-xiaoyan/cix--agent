@@ -18,6 +18,9 @@ from .contracts import (
 )
 from .video_pose import VIDEO_POSE, VideoArchive, VideoPoseOutput, VideoPoseRequest, VideoRange
 from .sleep_stage import STAGE_SKILL, AuthorizedEpoch, SleepStageOutput, SleepStageRequest, SleepStageRuntime
+from .depth_posture import (
+    DEPTH_SKILL, AuthorizedDepthSample, DepthPostureOutput, DepthPostureRequest, DepthPostureRuntime,
+)
 
 
 @dataclass(frozen=True)
@@ -26,7 +29,8 @@ class Skill:
     description: str
     input_model: type[ContractModel]
     output_model: type[ContractModel]
-    handler: Callable[[Any], Awaitable[ContractModel]]
+    handler: Callable[..., Awaitable[ContractModel]]
+    accepts_call_id: bool = False
 
 
 def video_pose_skill(archive: VideoArchive, grants: Mapping[str, VideoRange]) -> Skill:
@@ -50,6 +54,19 @@ def sleep_stage_skill(runtime: SleepStageRuntime, grants: Iterable[AuthorizedEpo
                  'Only use authorized dataset, subject and epoch identifiers: '
                  + str(list(authorized)) + '. The model is low accuracy; report its limitations.',
                  SleepStageRequest, SleepStageOutput, infer)
+
+
+def depth_posture_skill(runtime: DepthPostureRuntime, grants: Iterable[AuthorizedDepthSample]) -> Skill:
+    authorized = {asset.request.sample_id: asset for asset in grants}
+
+    async def infer(request, call_id):
+        return await runtime.infer(request, authorized, call_id)
+
+    return Skill(DEPTH_SKILL,
+                 'Classify a single frozen depth image on CIX P1 NPU. subject_id and pose_id are '
+                 'one-based frame identifiers, independent of window time. Use the exact IDs in the task. '
+                 'dataset_id=slp_cover1_frozen_v03 and model_version=depth_posture_v03.',
+                 DepthPostureRequest, DepthPostureOutput, infer, accepts_call_id=True)
 
 
 class WindowReader(Protocol):

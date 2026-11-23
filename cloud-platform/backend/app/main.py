@@ -13,10 +13,12 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from shared.schemas.events import Event
-from shared.schemas.api import (AnalysisRequest, AnalysisTask, BatchRequest, BatchResponse,
+from shared.schemas.api import (AnalysisTask, BatchRequest, BatchResponse,
     DeviceStatus, EventQuery, HealthResponse, Page)
+from shared.schemas.skill_tasks import EdgeAnalysisRequest, EdgeOutcome, EdgeTaskDetail, EdgeTaskStatus, STAGE_SKILL, TaskRequest
 from .config import Settings
-from .db import Device, EventRow, TaskRow, database, now
+from .db import AnalysisResult, Device, EventRow, TaskRow, database, now
+from . import edge_tasks
 from .security import canonical, check_device, decode_cursor, digest, encode_cursor, fail, identity, scope
 from .worker import MockWorker
 
@@ -51,6 +53,7 @@ def create_app(settings=None):
 
     app = FastAPI(title='Health Monitor Cloud', version='1.0.0', lifespan=lifespan)
     app.state.engine, app.state.factory = engine, factory
+    app.include_router(edge_tasks.routes(factory, task_dto, insert_device))
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.origins),
         allow_methods=['GET', 'POST'], allow_headers=['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Request-ID'],
         expose_headers=['X-Request-ID'])
@@ -212,10 +215,12 @@ def create_app(settings=None):
             return EVENT.validate_python(row.data)
 
     @app.post('/api/v1/analysis/tasks', response_model=AnalysisTask, status_code=202)
-    def create_task(body: AnalysisRequest, request: Request,
+    def create_task(body: TaskRequest, request: Request,
                     idempotency_key: Annotated[str, Header(min_length=1, max_length=128)]):
         user = request.state.user
         check_device(user, body.device_id)
+        if isinstance(body, EdgeAnalysisRequest) and user['role'] != 'operator':
+            fail(403, 'operator_required', 'An operator credential is required to submit inference')
         data = body.model_dump(mode='json')
         def existing_task(session):
             return session.scalar(select(TaskRow).where(TaskRow.identity == user['subject'], TaskRow.idempotency_key == idempotency_key))
@@ -242,15 +247,20 @@ def create_app(settings=None):
                     return checked(existing)
             raise
 
-    @app.get('/api/v1/analysis/tasks/{task_id}', response_model=AnalysisTask)
+    @app.get('/api/v1/analysis/tasks/{task_id}', response_model=EdgeTaskDetail | AnalysisTask)
     def task_detail(task_id: UUID, request: Request):
         with factory() as session:
             row = session.get(TaskRow, str(task_id))
             if row is None or row.device_id not in request.state.user['devices']:
                 fail(404, 'not_found', 'Task not found')
+            if row.request.get('analysis_type') == STAGE_SKILL:
+                result = session.get(AnalysisResult, row.task_id)
+                outcome = result.result if result else ({'error': row.error} if row.error else None)
+                return EdgeTaskDetail(**task_dto(row).model_dump(),
+                                      outcome=EdgeOutcome.model_validate(outcome) if outcome else None)
             return task_dto(row)
 
-    @app.get('/api/v1/analysis/tasks', response_model=Page[AnalysisTask])
+    @app.get('/api/v1/analysis/tasks', response_model=Page[EdgeTaskStatus | AnalysisTask])
     def tasks(request: Request, device_id: str | None = None, limit: int = Query(50, ge=1, le=200), cursor: str | None = None):
         user = request.state.user
         if device_id:
@@ -269,7 +279,13 @@ def create_app(settings=None):
             rows = session.scalars(stmt.where(TaskRow.created_at <= datetime.fromisoformat(snapshot)).order_by(TaskRow.task_id).limit(limit + 1)).all()
             more, rows = len(rows) > limit, rows[:limit]
             token = encode_cursor(settings, context, rows[-1].task_id, snapshot, expires) if more else None
-            return Page(items=[task_dto(r) for r in rows], next_cursor=token)
+            items = []
+            for row in rows:
+                entry = task_dto(row)
+                if row.request.get('analysis_type') == STAGE_SKILL:
+                    entry = EdgeTaskStatus(**entry.model_dump())
+                items.append(entry)
+            return Page(items=items, next_cursor=token)
 
     @app.get('/api/v1/devices', response_model=Page[DeviceStatus])
     def devices(request: Request, limit: int = Query(50, ge=1, le=200), cursor: str | None = None):

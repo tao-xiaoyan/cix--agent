@@ -1,0 +1,10 @@
+[Unit]
+Description=Monitor Gemini 335 capture every 5 seconds
+
+[Timer]
+OnBootSec=15
+OnUnitActiveSec=5
+AccuracySec=1
+
+[Install]
+WantedBy=timers.target

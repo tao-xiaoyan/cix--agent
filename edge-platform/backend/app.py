@@ -24,6 +24,13 @@ from pydantic import TypeAdapter, ValidationError
 from shared.interfaces import ModelInput, ModelOutput
 from shared.schemas.api import AnalysisRequest, AnalysisTask, BatchResponse, DeviceStatus, EventQuery, HealthResponse, Page, RealtimeMessage
 from shared.schemas.events import Event
+# Support the existing app-dir entry point and package-based board deployment.
+if __package__:
+    from . import agent_workbench, cloud_tasks, depth_preview
+else:
+    import agent_workbench
+    import cloud_tasks
+    import depth_preview
 
 EVENT_ADAPTER = TypeAdapter(Event)
 ROOT = Path(__file__).resolve().parents[2]
@@ -373,20 +380,30 @@ def create_app(db_path: Path | None = None, mock: bool | None = None, cloud_clie
     client = cloud_client or (HttpCloudClient(url, token) if url and token else None)
     runtime = Runtime(Store(data_path), device_id, client, mock if mock is not None else os.getenv('EDGE_MOCK', '1') == '1')
 
+    operator_token = os.getenv('EDGE_OPERATOR_TOKEN', 'local-demo-token')
+    runs = agent_workbench.WorkbenchRuns(agent_workbench.configured_runner(operator_token))
+    assets = os.getenv('EDGE_SLEEP_STAGE_ASSETS')
+    cloud_worker = (cloud_tasks.CloudTaskWorker(runtime.store, device_id, url, token, Path(assets))
+                    if assets and url and token and not runtime.mock else None)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         tasks = [asyncio.create_task(runtime.sync())]
+        if cloud_worker:
+            tasks.append(asyncio.create_task(cloud_worker.loop()))
         if runtime.mock:
             tasks.append(asyncio.create_task(runtime.generate()))
-        yield
-        runtime.running = False
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            yield
+        finally:
+            await runs.close()
+            runtime.running = False
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     app = FastAPI(title='Health Monitor Edge', version='1.0.0', lifespan=lifespan)
     app.state.runtime = runtime
-    operator_token = os.getenv('EDGE_OPERATOR_TOKEN', 'local-demo-token')
     sessions: dict[str, float] = {}
 
     @app.middleware('http')
@@ -411,6 +428,9 @@ def create_app(db_path: Path | None = None, mock: bool | None = None, cloud_clie
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):
         return error(exc.status_code, 'unauthorized' if exc.status_code == 401 else 'http_error', str(exc.detail))
+
+    app.include_router(agent_workbench.routes(runs, require_auth))
+    app.include_router(depth_preview.routes(require_auth, error))
 
     @app.get('/health', response_model=HealthResponse)
     def health():

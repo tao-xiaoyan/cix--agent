@@ -5,3 +5,10 @@
 **/.env.*
 **/*.local
 .git
+
+edge-platform/
+**/.test-data/
+**/data/
+**/recordings/
+**/*.sqlite*
+**/*.token

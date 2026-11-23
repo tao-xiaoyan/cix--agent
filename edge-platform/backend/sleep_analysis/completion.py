@@ -8,12 +8,13 @@ from pydantic import ValidationError
 
 from .contracts import ActivityOutput, InspectionOutput, VerificationOutput, WindowRequest
 from .sleep_stage import STAGE_SKILL, SleepStageRequest, SleepStageOutput
+from .depth_posture import DEPTH_SKILL, DepthPostureRequest, DepthPostureOutput
 
 if TYPE_CHECKING:
     from .agent import TraceEntry
 
 
-CompletionGoal = Literal['inspect_signals', 'verify_observed_activity', 'infer_sleep_stage']
+CompletionGoal = Literal['inspect_signals', 'verify_observed_activity', 'infer_sleep_stage', 'infer_depth_posture']
 
 
 @dataclass(frozen=True)
@@ -21,13 +22,34 @@ class CompletionCheck:
     goal: CompletionGoal
     pending: str | None = None
     evidence_options: tuple[tuple[UUID, ...], ...] = ()
+    terminal_failure: str | None = None
 
 
 def check_completion(
     goal: CompletionGoal, target: WindowRequest, trace: tuple['TraceEntry', ...],
     stage_target: SleepStageRequest | None = None,
+    depth_target: DepthPostureRequest | None = None,
 ) -> CompletionCheck:
     """Find scoped evidence sets that answer the goal or document a real limitation."""
+    if goal == 'infer_depth_posture':
+        for entry in reversed(trace):
+            if (entry.call.name != DEPTH_SKILL or entry.call.call_id != entry.result.call_id
+                    or depth_target is None or entry.call.arguments != depth_target.model_dump()):
+                continue
+            if entry.result.status == 'denied' and entry.result.error == 'depth_posture_not_authorized':
+                return CompletionCheck(goal, evidence_options=((),), terminal_failure=entry.result.error)
+            try:
+                item = DepthPostureOutput.model_validate(entry.result.data)
+            except ValidationError:
+                continue
+            if (item.execution_id != entry.call.call_id
+                    or item.model_dump(include=set(DepthPostureRequest.model_fields)) != depth_target.model_dump()):
+                continue
+            if entry.result.status == 'succeeded' and item.status == 'success':
+                return CompletionCheck(goal, evidence_options=((entry.call.call_id,),))
+            if entry.result.status == 'failed' and item.status != 'success':
+                return CompletionCheck(goal, evidence_options=((),), terminal_failure=item.reason)
+        return CompletionCheck(goal, 'authorized_depth_sample_posture')
     if goal == 'infer_sleep_stage':
         options = []
         for entry in trace:

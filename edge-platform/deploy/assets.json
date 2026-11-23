@@ -1,0 +1,24 @@
+{
+  "qwen": {
+    "Qwen3-4B-Q4_K_M.gguf": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"
+  },
+  "depth": {
+    "depth_posture_v03.cix": "ad33423c78e738a9f5f14c1a4e4195725f41c4eab7bd76323fde6a73a10a7478",
+    "run_npu.py": "6d4d8edbc0e7a2fde722a0bafcb01f8fc3b3a4313dfb206c872009ef53546cac",
+    "frozen/raw.npy": "c467b9b557e73ccbb34ed18ebc1b0f4b5682e631fe7875db2e9383c998a47683",
+    "frozen/inputs.npy": "8b7e08a5ee143c4406d14c1b7dca4977d111eaa240b061637d028d29f864d52d",
+    "frozen/reference.json": "856a9a497bf7f96a238beb76125bae55be45aca0eb9d6e07b1a990dc27020e6b",
+    "frozen/preprocess_v02.py": "81b6738cbbe18b0314a361c2ff0d8ce6b9f973d3c47c6f1a30f6a52f1a27e395"
+  },
+  "depth-interface": {
+    "depth_posture_infer.py": "38bb9b4751fdfa8ef146e62f58189314a1450987149f9588afa921ff8d769499"
+  },
+  "ppg": {
+    "sleep_cnn.cix": "f24597fe2ec04170e0684e9c4266b7b05802dde3901833ed5264456c8ef92854",
+    "epoch_source.json": "b9818f471fec3d87f0f5380dcf665175ce3e601d8ef761d0f5cb1819c2ccc960",
+    "subject12_epoch1_input.npy": "3e01b8c3005fa3b413850beb0d1a94231e25e9df89eec81d76309de79909ce92"
+  },
+  "noe-helper": {
+    "utils/NOE_Engine.py": "5b5e0a06014b1689cebd5736f2bb68767e2c83f319402b43a7a94236675f536b"
+  }
+}

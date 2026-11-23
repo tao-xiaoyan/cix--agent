@@ -185,3 +185,59 @@ def test_migration_roundtrip(tmp_path, monkeypatch):
     assert 'events' not in inspect(engine).get_table_names()
     engine.dispose()
 
+
+
+def test_edge_task_lease_permission_and_terminal_replay(env):
+    from sqlalchemy import update
+
+    client, app, settings = env
+    operator = {'Authorization': 'Bearer operator-token'}
+    settings.identities.append({'subject': 'second', 'role': 'device', 'devices': ['second'],
+                                'token_sha256': hashlib.sha256(b'second-token').hexdigest()})
+    second = {'Authorization': 'Bearer second-token'}
+    tasks = '/api/v1/analysis/tasks'
+    claim_url = tasks + '/edge-claim'
+    body = {'device_id': 'mock-device-001', 'analysis_type': 'sleep_stage_inference',
+            'epoch': {'dataset_id': 'aauwss', 'subject_id': 12, 'epoch_id': 1}}
+    key = {'Idempotency-Key': 'edge-inference'}
+    assert client.post(tasks, json=body, headers=key).status_code == 403
+    created = client.post(tasks, json=body, headers={**operator, **key})
+    assert created.status_code == 202, created.text
+    task = created.json()
+    assert client.post(tasks, json=body, headers={**operator, **key}).json()['task_id'] == task['task_id']
+    changed = {**body, 'epoch': {**body['epoch'], 'epoch_id': 2}}
+    assert client.post(tasks, json=changed, headers={**operator, **key}).status_code == 409
+    assert not run_one(app.state.factory)
+    assert client.post(claim_url, headers=operator).status_code == 403
+    assert client.post(claim_url, headers=second).json() is None
+
+    first = client.post(claim_url).json()
+    assert first['task_id'] == task['task_id']
+    assert client.post(claim_url).json() is None
+    worker = MockWorker(app.state.factory)
+    worker.stop_event.set()
+    worker.start()
+    worker.stop()
+    detail = f"{tasks}/{task['task_id']}"
+    assert client.get(detail).json()['status'] == 'running'
+
+    with app.state.factory.begin() as session:
+        session.execute(update(TaskRow).where(TaskRow.task_id == task['task_id'])
+                        .values(updated_at=now()-timedelta(minutes=11)))
+    current = client.post(claim_url).json()
+    assert current['task_id'] == first['task_id'] and current['lease'] != first['lease']
+    outcome = {'error': {'code': 'epoch_not_authorized', 'message': 'Epoch is outside this board grant'}}
+    completion = {'lease': current['lease'], 'outcome': outcome}
+    finish = detail + '/edge-completion'
+    assert client.post(finish, json=completion, headers=second).status_code == 404
+    assert client.post(finish, json=completion, headers=operator).status_code == 403
+    assert client.post(finish, json={**completion, 'lease': first['lease']}).status_code == 409
+    assert client.post(finish, json={'lease': current['lease'], 'outcome': {}}).status_code == 422
+    accepted = client.post(finish, json=completion)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()['status'] == 'failed'
+    assert client.post(finish, json=completion).json() == accepted.json()
+    assert client.get(detail).json()['outcome']['error']['code'] == 'epoch_not_authorized'
+    assert client.get(tasks).json()['items'][0]['analysis_type'] == 'sleep_stage_inference'
+    with app.state.factory() as session:
+        assert session.scalar(select(func.count()).select_from(EventRow)) == 0

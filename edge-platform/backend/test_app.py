@@ -1,7 +1,10 @@
 import asyncio
+import os
+import struct
 import tempfile
 from pathlib import Path
 import sys
+import time
 from uuid import uuid4
 
 import pytest
@@ -56,6 +59,63 @@ def test_ws_stream_and_auth():
                 TypeAdapter(Event).validate_python(message['event'])
             assert client.get('/api/v1/events/recent').status_code == 200
             assert client.get('/api/v1/device/status').json()['pending_upload_count'] > 0
+
+
+def test_depth_preview_auth_and_disabled(tmp_path, monkeypatch):
+    monkeypatch.delenv('EDGE_DEPTH_PREVIEW_PATH', raising=False)
+    monkeypatch.setenv('EDGE_OPERATOR_TOKEN', 'depth-test')
+    status = '/api/v1/depth/status'
+    preview = '/api/v1/depth/preview.bmp'
+    with TestClient(app_module.create_app(tmp_path / 'events.sqlite3', mock=False)) as client:
+        assert client.get(status).status_code == 401
+        assert client.get(preview).status_code == 401
+        assert client.post('/api/v1/session', headers={'Authorization': 'Bearer depth-test'}).status_code == 200
+        assert client.get(status).json() == {'state': 'disabled', 'updated_at': None, 'age_ms': None}
+        assert client.get(preview).status_code == 404
+
+
+def test_depth_preview_frame_lifecycle(tmp_path, monkeypatch):
+    path = tmp_path / 'depth.bmp'
+    pending = tmp_path / 'depth.tmp'
+    monkeypatch.setenv('EDGE_DEPTH_PREVIEW_PATH', str(path))
+    monkeypatch.setenv('EDGE_OPERATOR_TOKEN', 'depth-test')
+    status = '/api/v1/depth/status'
+    preview = '/api/v1/depth/preview.bmp'
+    frame = (struct.pack('<2sIHHI', b'BM', 58, 0, 0, 54)
+             + struct.pack('<IiiHHIIiiII', 40, 1, 1, 1, 24, 0, 4, 0, 0, 0, 0)
+             + b'\x00\x7f\xff\x00')
+    headers = {'Authorization': 'Bearer depth-test'}
+    with TestClient(app_module.create_app(tmp_path / 'events.sqlite3', mock=False), headers=headers) as client:
+        assert client.get(status).json()['state'] == 'waiting'
+        assert client.get(preview, params={'path': str(tmp_path / 'events.sqlite3')}).status_code == 404
+        path.mkdir()
+        assert client.get(status).json()['state'] == 'error'
+        assert client.get(preview).status_code == 503
+        path.rmdir()
+        path.write_bytes(frame[:-1])
+        assert client.get(status).json()['state'] == 'error'
+        assert client.get(preview).status_code == 503
+        path.unlink()
+
+        pending.write_bytes(frame)
+        pending.replace(path)
+        result = client.get(preview)
+        assert result.status_code == 200
+        assert result.content == frame
+        assert result.headers['Content-Type'] == 'image/bmp'
+        assert result.headers['Cache-Control'] == 'no-store'
+        assert result.headers['X-Depth-Updated-At']
+        assert client.get(status).json()['state'] == 'live'
+
+        old = time.time() - 4
+        os.utime(path, (old, old))
+        assert client.get(status).json()['state'] == 'stale'
+        assert client.get(preview).status_code == 503
+
+        pending.write_bytes(frame[:-4] + b'\xff\x00\x7f\x00')
+        pending.replace(path)
+        assert client.get(status).json()['state'] == 'live'
+        assert client.get(preview).content != frame
 
 
 def test_rule_decision_and_offline_queue():

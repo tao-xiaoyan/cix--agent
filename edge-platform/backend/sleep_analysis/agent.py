@@ -14,9 +14,13 @@ from shared.schemas.events import ContractModel
 
 from .completion import CompletionCheck, CompletionGoal, check_completion
 from .contracts import HistoryRequest, RegisteredActivity, TimeWindow, WindowRequest
-from .skills import Skill, local_skills, video_pose_skill, sleep_stage_skill
+from .skills import Skill, local_skills, video_pose_skill, sleep_stage_skill, depth_posture_skill
 from .video_pose import VIDEO_POSE, VideoAccessDenied, VideoArchive, VideoPoseRequest, VideoRange
 from .sleep_stage import STAGE_SKILL, StageAccessDenied, AuthorizedEpoch, SleepStageRequest, SleepStageRuntime
+from .depth_posture import (
+    DEPTH_SKILL, AuthorizedDepthSample, DepthAccessDenied, DepthPostureOutput, DepthPostureRequest,
+    DepthPostureRuntime, display_posture,
+)
 
 
 class SkillRegistry:
@@ -79,6 +83,9 @@ class LocalToolExecutor(ToolExecutor):
         try:
             request = skill.input_model.model_validate(call.arguments)
         except ValidationError:
+            if call.name == DEPTH_SKILL:
+                return ToolResult(call_id=call.call_id, status='denied', error='invalid_arguments',
+                                  data={'status': 'denied', 'predicted_posture': None})
             return ToolResult(call_id=call.call_id, status='denied', error='invalid_arguments')
         if isinstance(request, WindowRequest):
             scope_fields = [field for field in ('dataset_id', 'session_id')
@@ -92,7 +99,8 @@ class LocalToolExecutor(ToolExecutor):
                 return ToolResult(call_id=call.call_id, status='denied', error='out_of_scope',
                                   data={'scope_fields': scope_fields})
         elif not ((call.name == VIDEO_POSE and isinstance(request, VideoPoseRequest))
-                  or (call.name == STAGE_SKILL and isinstance(request, SleepStageRequest))):
+                  or (call.name == STAGE_SKILL and isinstance(request, SleepStageRequest))
+                  or (call.name == DEPTH_SKILL and isinstance(request, DepthPostureRequest))):
             return ToolResult(call_id=call.call_id, status='denied', error='invalid_scope_contract')
         if isinstance(request, HistoryRequest) and self.authorized_history is not None and not any(
             _same_source(request, grant) and _contains(grant.window, request.history_window)
@@ -106,20 +114,35 @@ class LocalToolExecutor(ToolExecutor):
             return ToolResult(call_id=call.call_id, status='denied', error='duplicate_unavailable_call',
                               data={'original_call_id': str(original_id)})
         try:
-            output = await asyncio.wait_for(skill.handler(request), timeout=self.timeout)
+            args = (request, call.call_id) if skill.accepts_call_id else (request,)
+            output = await asyncio.wait_for(skill.handler(*args), timeout=self.timeout)
             output = skill.output_model.model_validate(output.model_dump())
             request_fields = request.model_dump()
             if output.model_dump(include=set(request_fields)) != request_fields:
                 raise ValueError('skill output does not match request')
             data = output.model_dump(mode='json')
+            if isinstance(output, DepthPostureOutput):
+                if output.execution_id != call.call_id:
+                    raise ValueError('depth execution ID does not match call ID')
+                if output.status != 'success':
+                    return ToolResult(call_id=call.call_id, status='failed', data=data, error=output.reason)
             if data.get('status') == 'unavailable' and data.get('reason') in _DETERMINISTIC_UNAVAILABLE.get(call.name, ()):
                 self._unavailable[key] = call.call_id
             return ToolResult(call_id=call.call_id, status='succeeded', data=data)
+        except DepthAccessDenied as exc:
+            return ToolResult(call_id=call.call_id, status='denied', error=str(exc),
+                              data={**request.model_dump(mode='json'), 'status': 'denied', 'predicted_posture': None})
         except (VideoAccessDenied, StageAccessDenied) as exc:
             return ToolResult(call_id=call.call_id, status='denied', error=str(exc))
         except TimeoutError:
+            if call.name == DEPTH_SKILL:
+                return ToolResult(call_id=call.call_id, status='failed', error='skill_timeout',
+                                  data={'status': 'timeout', 'predicted_posture': None})
             return ToolResult(call_id=call.call_id, status='failed', error='skill_timeout')
         except Exception:
+            if call.name == DEPTH_SKILL:
+                return ToolResult(call_id=call.call_id, status='failed', error='skill_execution_failed',
+                                  data={'status': 'failed', 'predicted_posture': None})
             return ToolResult(call_id=call.call_id, status='failed', error='skill_execution_failed')
 
 
@@ -213,6 +236,7 @@ class SleepAnalysisAgent:
         max_calls: int = 8, planner_timeout: float = 10, skill_timeout: float = 10, run_timeout: float | None = None,
         video_archive: VideoArchive | None = None,
         stage_runtime: SleepStageRuntime | None = None,
+        depth_runtime: DepthPostureRuntime | None = None,
     ):
         if max_calls < 1 or not all(isfinite(value) and value > 0 for value in (planner_timeout, skill_timeout)):
             raise ValueError('expected positive call limit and finite positive timeouts')
@@ -226,6 +250,7 @@ class SleepAnalysisAgent:
         self.run_timeout = run_timeout
         self.video_archive = video_archive
         self.stage_runtime = stage_runtime
+        self.depth_runtime = depth_runtime
 
     async def run(self, request: WindowRequest) -> RunResult:
         """Legacy trusted entry. The caller must authorize the target and any historical use."""
@@ -235,12 +260,17 @@ class SleepAnalysisAgent:
                              authorized_history: Iterable[WindowRequest] = (),
                              completion_goal: CompletionGoal | None = None,
                              authorized_videos: Mapping[str, VideoRange] | None = None,
-                             authorized_epochs: Iterable[AuthorizedEpoch] = ()) -> RunResult:
+                             authorized_epochs: Iterable[AuthorizedEpoch] = (),
+                             depth_target: DepthPostureRequest | None = None,
+                             authorized_depth: Iterable[AuthorizedDepthSample] = ()) -> RunResult:
         """Use server-provided grants and an optional explicit goal, outside the planner's control."""
         epochs = tuple(authorized_epochs)
         if completion_goal == 'infer_sleep_stage' and (len(epochs) != 1 or self.stage_runtime is None):
             raise ValueError('sleep stage goal requires exactly one trusted epoch and an NPU runtime')
-        if completion_goal not in (None, 'inspect_signals', 'verify_observed_activity', 'infer_sleep_stage'):
+        if completion_goal == 'infer_depth_posture' and (depth_target is None or self.depth_runtime is None):
+            raise ValueError('depth posture goal requires a trusted target and runtime')
+        if completion_goal not in (None, 'inspect_signals', 'verify_observed_activity',
+                                   'infer_sleep_stage', 'infer_depth_posture'):
             raise ValueError('unknown completion goal')
         target = WindowRequest.model_validate(target_window.model_dump())
         grant = WindowRequest.model_validate(authorized_scope.model_dump())
@@ -250,12 +280,19 @@ class SleepAnalysisAgent:
         grants = (None if authorized_videos is None else
                   {video_id: VideoRange.model_validate(window.model_dump())
                    for video_id, window in authorized_videos.items()})
-        return await self._run(target, history, completion_goal, grants, epochs)
+        depth = (DepthPostureRequest.model_validate(depth_target.model_dump())
+                 if completion_goal == 'infer_depth_posture' and depth_target is not None else None)
+        if depth is not None and depth.dataset_id != target.dataset_id:
+            return RunResult(run_id=uuid4(), request=target, termination='target_out_of_scope', trace=())
+        depth_grants = tuple(item for item in authorized_depth if item.request == depth)
+        return await self._run(target, history, completion_goal, grants, epochs, depth, depth_grants)
 
     async def _run(self, request: WindowRequest, history: tuple[WindowRequest, ...] | None,
                    completion_goal: CompletionGoal | None = None,
                    video_grants: Mapping[str, VideoRange] | None = None,
-                   stage_grants: tuple[AuthorizedEpoch, ...] = ()) -> RunResult:
+                   stage_grants: tuple[AuthorizedEpoch, ...] = (),
+                   depth_target: DepthPostureRequest | None = None,
+                   depth_grants: tuple[AuthorizedDepthSample, ...] = ()) -> RunResult:
         clock = asyncio.get_running_loop().time
         deadline = clock() + self.run_timeout if self.run_timeout is not None else float('inf')
         request = request.model_copy(deep=True)
@@ -268,6 +305,8 @@ class SleepAnalysisAgent:
             registry = SkillRegistry((*self.registry.skills(), video_pose_skill(self.video_archive, video_grants)))
         if self.stage_runtime is not None and stage_grants:
             registry = SkillRegistry((*registry.skills(), sleep_stage_skill(self.stage_runtime, stage_grants)))
+        if self.depth_runtime is not None and depth_target is not None:
+            registry = SkillRegistry((*registry.skills(), depth_posture_skill(self.depth_runtime, depth_grants)))
         stage_target = stage_grants[0].request if completion_goal == 'infer_sleep_stage' else None
         executor = LocalToolExecutor(registry, request, self.skill_timeout, authorized_history=history)
         plan_with_budget = getattr(self.planner, 'plan_with_budget', None)
@@ -284,7 +323,7 @@ class SleepAnalysisAgent:
             try:
                 remaining_calls = self.max_calls - len(trace)
                 if completion_goal is not None:
-                    completion = check_completion(completion_goal, request, tuple(trace), stage_target)
+                    completion = check_completion(completion_goal, request, tuple(trace), stage_target, depth_target)
                     if completion.pending and remaining_calls == 0:
                         break
                 feedback = {} if completion is None else {
@@ -314,15 +353,39 @@ class SleepAnalysisAgent:
                         if reason is not None:
                             rejections.append(FinishRejection(round=round_number, reason=reason))
                             continue
+                    if depth_target is not None and completion is not None:
+                        findings = candidate.report.findings if candidate.report else []
+                        if completion.terminal_failure:
+                            if findings:
+                                raise IncompleteEvidence('a failed depth call cannot be a finding')
+                            reason = completion.terminal_failure
+                            candidate.report = GroundedReport(
+                                answer=f'未取得该样本的有效深度姿态证据（{reason}）。',
+                                findings=[], uncertainty_reasons=[reason],
+                            )
+                        else:
+                            grant = depth_grants[0] if depth_grants else None
+                            if (len(findings) != 1 or findings[0].skill != DEPTH_SKILL or grant is None
+                                    or self.depth_runtime is None):
+                                raise IncompleteEvidence('missing authorized depth finding')
+                            finding = findings[0]
+                            result = DepthPostureOutput.model_validate(finding.result.data)
+                            if (result.execution_id != finding.result.call_id
+                                    or not self.depth_runtime.verifies(result, grant)):
+                                raise IncompleteEvidence('depth evidence verification failed')
+                            candidate.report = GroundedReport(
+                                answer=display_posture(finding.result.data, result.execution_id),
+                                findings=findings, uncertainty_reasons=['assumed_protocol_derived_labels'],
+                            )
                     if candidate.report is not None:
                         if any(item.call_id not in cited for item in limitations):
                             raise IncompleteEvidence('finish omitted a required limitation result')
                         video_only = ((video_enabled or stage_grants)
                                       and all(item.skill in (VIDEO_POSE, STAGE_SKILL) for item in findings))
-                        candidate.report.analysis_scope = None if video_only else request.model_copy(deep=True)
+                        candidate.report.analysis_scope = None if video_only or depth_target else request.model_copy(deep=True)
                         candidate.report.limitations = list(limitations)
                     finish = candidate
-                    termination = 'finished'
+                    termination = 'task_incomplete' if completion and completion.terminal_failure else 'finished'
                     break
                 if not isinstance(action, ToolCall):
                     raise TypeError('planner must return ToolCall or Finish')
@@ -350,7 +413,8 @@ class SleepAnalysisAgent:
                         executor.execute(call), timeout=max(0, deadline - clock()) if self.run_timeout is not None else None,
                     )
                 except TimeoutError:
-                    result = ToolResult(call_id=call.call_id, status='failed', error='run_timeout')
+                    data = {'status': 'timeout', 'predicted_posture': None} if call.name == DEPTH_SKILL else {}
+                    result = ToolResult(call_id=call.call_id, status='failed', error='run_timeout', data=data)
                     termination = 'run_timeout'
                 if result.error == 'skill_timeout':
                     termination = 'skill_timeout'
@@ -359,7 +423,7 @@ class SleepAnalysisAgent:
             if termination != budget_termination:
                 break
         if completion_goal is not None:
-            completion = check_completion(completion_goal, request, tuple(trace), stage_target)
+            completion = check_completion(completion_goal, request, tuple(trace), stage_target, depth_target)
         return RunResult(run_id=run_id, request=request, termination=termination, finish=finish, trace=tuple(trace),
                          finish_rejections=tuple(rejections),
                          completion_pending=completion.pending if completion else None)
@@ -370,7 +434,8 @@ def create_agent(
     activities: Iterable[RegisteredActivity] = (), planner_timeout: float = 10, run_timeout: float | None = None,
     video_archive: VideoArchive | None = None,
     stage_runtime: SleepStageRuntime | None = None,
+    depth_runtime: DepthPostureRuntime | None = None,
 ) -> SleepAnalysisAgent:
     return SleepAnalysisAgent(SkillRegistry(local_skills(datasets, activities=activities)), planner,
                               planner_timeout=planner_timeout, run_timeout=run_timeout, video_archive=video_archive,
-                              stage_runtime=stage_runtime)
+                              stage_runtime=stage_runtime, depth_runtime=depth_runtime)

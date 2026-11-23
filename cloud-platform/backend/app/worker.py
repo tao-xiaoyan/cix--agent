@@ -2,18 +2,19 @@
 import threading
 import logging
 from uuid import uuid4
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from pydantic import TypeAdapter
 from shared.schemas.events import Event
 from .db import TaskRow, EventRow, AnalysisResult, now
 from .security import digest
 
 ADAPTER = TypeAdapter(Event)
+MOCK_TASK = func.coalesce(TaskRow.request['analysis_type'].as_string(), 'multimodal_summary') == 'multimodal_summary'
 
 
 def run_one(factory):
     with factory() as session:
-        task = session.scalar(select(TaskRow).where(TaskRow.status == 'queued').order_by(TaskRow.created_at).limit(1))
+        task = session.scalar(select(TaskRow).where(TaskRow.status == 'queued', MOCK_TASK).order_by(TaskRow.created_at).limit(1))
         if task is None:
             return False
         task_id = task.task_id
@@ -65,7 +66,7 @@ class MockWorker:
     def start(self):
         # MVP is explicitly single API process / worker. Interrupted jobs become failed.
         with self.factory.begin() as session:
-            session.execute(update(TaskRow).where(TaskRow.status == 'running').values(status='failed', updated_at=now(),
+            session.execute(update(TaskRow).where(TaskRow.status == 'running', MOCK_TASK).values(status='failed', updated_at=now(),
                 error={'code': 'worker_interrupted', 'message': 'Worker restarted during analysis', 'details': {}}))
         self.thread.start()
 

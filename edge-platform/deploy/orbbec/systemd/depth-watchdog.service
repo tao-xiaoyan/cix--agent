@@ -1,0 +1,7 @@
+[Unit]
+Description=Check Gemini 335 depth preview freshness
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.local/share/cix-demo/orbbec
+ExecStart=/usr/bin/python3 %h/.local/share/cix-demo/orbbec/depth_watchdog.py

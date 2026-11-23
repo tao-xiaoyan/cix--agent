@@ -1,0 +1,7 @@
+edge-platform/deploy/**/*.sh text eol=lf
+edge-platform/deploy/orbbec/** text eol=lf
+# These runtime files are locked by SHA-256, including their original line endings.
+edge-platform/experiments/depth_posture_v03/run_npu.py -text
+edge-platform/experiments/depth_posture_v03/frozen/reference.json -text whitespace=cr-at-eol
+edge-platform/experiments/depth_posture_v03/frozen/preprocess_v02.py -text whitespace=cr-at-eol
+edge-platform/experiments/depth_posture_v031/depth_posture_infer.py -text

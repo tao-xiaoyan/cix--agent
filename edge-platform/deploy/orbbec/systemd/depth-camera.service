@@ -1,0 +1,13 @@
+[Unit]
+Description=Orbbec Gemini 335 depth capture
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/cix-demo/orbbec
+ExecStart=%h/.local/share/cix-demo/orbbec/depth_live
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

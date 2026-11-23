@@ -17,6 +17,7 @@ from .completion import CompletionCheck
 from .contracts import WindowRequest
 from .video_pose import VIDEO_POSE
 from .sleep_stage import STAGE_SKILL
+from .depth_posture import DEPTH_SKILL, display_posture
 
 
 class ModelClient(Protocol):
@@ -191,6 +192,10 @@ def _feedback(entry: TraceEntry, scope: dict, refs: dict[UUID, str]) -> dict:
             'dataset_id', 'subject_id', 'epoch_id', 'predicted_stage', 'logits', 'backend',
             'device', 'model_id', 'limitations', 'test_accuracy', 'test_macro_f1',
         ) if data.get(key) is not None})
+    if entry.call.name == DEPTH_SKILL:
+        summary.update({key: data[key] for key in (
+            'dataset_id', 'subject_id', 'pose_id', 'predicted_posture', 'inference_device', 'model_version',
+        ) if data.get(key) is not None})
     call = {'name': entry.call.name}
     arguments = {key: value for key, value in entry.call.arguments.items() if key not in scope or scope[key] != value}
     if arguments:
@@ -236,7 +241,7 @@ def _calls_without_new_usable_data(trace: tuple[TraceEntry, ...]) -> int:
     for entry in trace:
         key = _feedback_key(entry)
         if (key not in seen and entry.result.status == 'succeeded'
-                and entry.result.data.get('status') in ('ok', 'partial')):
+                and entry.result.data.get('status') in ('ok', 'partial', 'success')):
             stalled = 0
         else:
             stalled += 1
@@ -324,6 +329,10 @@ class QwenPlanner:
             }}
             system += (' Resolve the pending completion item before finishing. '
                        'If it is null, finish using every ref from one cite_one_group.')
+            if completion.goal == 'infer_depth_posture' and completion.pending is None:
+                skills = ()
+                if completion.terminal_failure:
+                    system += ' The exact requested sample has no usable result. Finish with empty evidence.'
         prompt = json.dumps({
             'task': self.task,
             'scope': request.model_dump(mode='json'),
@@ -375,7 +384,8 @@ def _report(action: FinishAction, trace: tuple[TraceEntry, ...]) -> GroundedRepo
     uncertainty = []
     video_denials = {entry.result.error for entry in trace if entry.call.name == VIDEO_POSE
                      and entry.result.status == 'denied'}
-    video_only = all(item.skill in (VIDEO_POSE, STAGE_SKILL) for item in findings) and (findings or video_denials)
+    video_only = all(item.skill in (VIDEO_POSE, STAGE_SKILL, DEPTH_SKILL)
+                     for item in findings) and (findings or video_denials)
     lines = [] if video_only else ['现有证据不足以判断昨晚睡得不安稳的原因。']
     denial_messages = {
         'video_not_found': '视频标识未登记，无法分析姿态。',
@@ -424,6 +434,10 @@ def _report(action: FinishAction, trace: tuple[TraceEntry, ...]) -> GroundedRepo
                 description = '本次睡眠阶段 NPU 推理不可用。'
             description += ('模型测试 Accuracy 21.63%，Macro F1 0.2016，'
                             '性能较低，仅供工程实验，不能作为可靠的医学睡眠分期诊断。')
+        elif item.skill == DEPTH_SKILL:
+            lines.append(display_posture(data, item.result.call_id))
+            uncertainty.append('assumed_protocol_derived_labels')
+            continue
         else:
             events = data.get('events') or []
             if events and any(event['provenance'] == 'test' for event in events):

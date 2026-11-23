@@ -41,3 +41,23 @@ id_ed25519*
 htmlcov/
 *.db-*
 logs/
+
+# Demo assets and private runtime material
+*.cix
+*.npy
+*.npz
+*.pth
+*.y16frame
+*.token
+*.bmp
+*.raw
+*.mp4
+*.tar
+*.tgz
+*.tar.gz
+*.zip
+*.whl
+edge-platform/deploy/.board-audit.local/
+edge-platform/deploy/orbbec/build/
+edge-platform/deploy/orbbec/live/
+edge-platform/deploy/ppg/live_data/
