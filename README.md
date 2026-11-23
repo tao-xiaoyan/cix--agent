@@ -24,18 +24,18 @@ flowchart LR
 
 ## 最小启动
 
-1. **CIX P1 板端**使用 Orange Pi 6 Plus ARM64、兼容的驱动与 NOE Python 环境。准备已校验 GGUF、两个 CIX 模型及授权样本，按需安装 Orbbec ARM64 SDK。模型、样本和 SDK 单独取得。[资产与 SHA-256](docs/demo-assets.md)
-2. **板端采集与 API**按部署说明启动相机用户服务，再运行 `bash edge-platform/deploy/start-demo.sh`。脚本启动本地 llama-server 和 FastAPI，默认分别监听板端回环 `18080` 和 `18551`。[命令与变量](docs/demo-reproduction.md)
-3. **普通 PC**用 Node 22 运行端侧 Vue，通过 SSH 将本机 `8001` 转发到板端 API。云端 FastAPI、PostgreSQL 16 和 Vue 可由普通 PC 的 Docker Compose 启动。云端提交任务前需登记板端设备并接通领单与回传。[前端和云端部署](docs/demo-reproduction.md)
+1. **准备 CIX P1 资产。** 下载固定版 Qwen GGUF 和 CIX 25Q3 helper，按说明提取 AAUWSS epoch。两个 CIX 模型和 SLP 冻结输入待授权交付。[资产来源与 SHA-256](docs/demo-assets.md)
+2. **先启动普通 PC 的云端与 SSH 转发，再启动板端。** 云端 Compose 提供 PostgreSQL 16、FastAPI 和 Vue。板端运行 `bash edge-platform/deploy/start-demo.sh`，启动 Qwen 和 FastAPI。只演示静态深度时可省略云端，Orbbec 相机为可选预览。[启动顺序与命令](docs/demo-reproduction.md)
+3. **打开浏览器。** 端侧 Vue 的 Workbench 提交 `s101_p08`，云 Vue 提交固定 AAUWSS `12/1`。[演示步骤](docs/demo-reproduction.md#5-浏览器演示)
 
 ## 演示与实机证据
 
-在端侧页面先查看 Gemini 335 预览，再在 Workbench 请求已登记的 `s101_p08`。历史板端记录返回 `supine`，worker 打开 `/dev/aipu` 并记录 NOE 同步推理。然后从云 Vue 为登记设备提交 AAUWSS `12/1`。历史实机记录显示板端 NOE 返回 `N1`，PostgreSQL 保存一条结果事件，Vue 回读成功。没有板卡的评委可以直接审查模型与输入哈希、原始输出、任务关联和源记录哈希。[脱敏实机证据](docs/hardware-evidence.md)
+在端侧 Workbench 请求已登记的 `s101_p08`。历史板端记录返回 `supine`，worker 打开 `/dev/aipu` 并记录 NOE 同步推理。然后从云 Vue 为登记设备提交 AAUWSS `12/1`。历史实机记录显示板端 NOE 返回 `N1`，PostgreSQL 保存一条结果事件，Vue 回读成功。没有板卡的评委可以直接审查模型与输入哈希、原始输出、任务关联和源记录哈希。[脱敏实机证据](docs/hardware-evidence.md)
 
 ## 已知边界
 
 - 实时相机预览与静态 SLP 推理独立运行。实时 Y16 帧尚未接入姿态 Skill，姿态推理按请求使用独立 worker。
 - 云睡眠分期使用授权 PPG 样例，当前演示未把新采集的 PPG 映射到分期输入。证据中样例标注是 Wake，模型输出是 N1。记录用于展示执行、对照和追溯能力，不能作为临床准确性或总体性能结论。
-- 实机证据来自历史验收版本。本次候选复用已校验模型和执行源码，最终候选的整套板端部署未在本轮重跑。
+- 实机证据来自历史验收版本。复现说明使用同一组已校验模型和执行源码。
 
 工程入口为 `edge-platform/`、`cloud-platform/` 和 `shared/`。后端与共享契约回归保留在各平台及 `tests/`。
